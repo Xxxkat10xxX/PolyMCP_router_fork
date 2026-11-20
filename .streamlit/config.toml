@@ -1,0 +1,79 @@
+# Тема «бумага и чернила»: кремовый фон, чёрные рамки, коралловый акцент, Space Grotesk.
+[server]
+enableStaticServing = true
+
+[client]
+toolbarMode = "minimal"
+
+[theme]
+base = "light"
+primaryColor = "#f26d5b"
+backgroundColor = "#fdfcf0"
+secondaryBackgroundColor = "#e6e4d5"
+textColor = "#18181b"
+linkColor = "#18181b"
+borderColor = "#18181b"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "none"
+buttonRadius = "none"
+font = "'Space Grotesk', sans-serif"
+headingFont = "'Space Grotesk', sans-serif"
+headingFontWeights = [600, 600, 600, 600, 600, 600]
+codeFont = "monospace"
+codeBackgroundColor = "#f3f1e2"
+dataframeBorderColor = "#18181b"
+dataframeHeaderBackgroundColor = "#e6e4d5"
+redColor = "#dc2626"
+orangeColor = "#f26d5b"
+chartCategoricalColors = ["#f26d5b", "#18181b", "#57534e", "#e6a23c", "#a8a29e"]
+
+[theme.sidebar]
+backgroundColor = "#fdfcf0"
+secondaryBackgroundColor = "#e6e4d5"
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/SpaceGrotesk-Regular.ttf"
+weight = 400
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/SpaceGrotesk-Medium.ttf"
+weight = 500
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/SpaceGrotesk-SemiBold.ttf"
+weight = 600
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/SpaceGrotesk-Bold.ttf"
+weight = 700
+
+# В Space Grotesk нет кириллицы: для кириллических символов то же семейство берёт глифы Manrope.
+# По одному начертанию на вес: с диапазоном весов браузер пропускает латиницу Space Grotesk.
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/Manrope-Variable.ttf"
+weight = 400
+unicodeRange = "U+0400-04FF, U+0500-052F, U+2116"
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/Manrope-Variable.ttf"
+weight = 500
+unicodeRange = "U+0400-04FF, U+0500-052F, U+2116"
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/Manrope-Variable.ttf"
+weight = 600
+unicodeRange = "U+0400-04FF, U+0500-052F, U+2116"
+
+[[theme.fontFaces]]
+family = "Space Grotesk"
+url = "app/static/fonts/Manrope-Variable.ttf"
+weight = 700
+unicodeRange = "U+0400-04FF, U+0500-052F, U+2116"
