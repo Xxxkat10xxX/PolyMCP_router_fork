@@ -1,0 +1,15 @@
+2026-11-17 15:48:02 INFO  api      request id=8f21 GET /health 200 3ms
+2026-11-17 15:50:11 INFO  deploy   billing v1.9.0 rollout started
+2026-11-17 15:50:44 ERROR billing  duplicate charge detected order=88121 retry=2 (BUG-101)
+2026-11-17 15:51:03 WARN  worker   queue latency 4.2s above threshold 2s
+2026-11-17 15:51:19 ERROR billing  migration 0042_vat_rates failed: column "kz_rate" does not exist
+2026-11-17 15:51:20 ERROR deploy   billing v1.9.0 rollout failed, keeping v1.8.3
+2026-11-17 15:52:40 INFO  auth     token refresh ok user=41
+2026-11-17 15:53:05 ERROR auth     refresh token reused concurrently, session revoked user=17 (BUG-107)
+2026-11-17 15:54:12 INFO  api      request id=9a03 GET /reports 200 8421ms
+2026-11-17 15:54:13 WARN  api      slow request /reports took 8421ms (BUG-110)
+2026-11-17 15:55:30 INFO  worker   export job 551 finished rows=120000
+2026-11-17 15:56:58 ERROR auth     refresh token reused concurrently, session revoked user=23 (BUG-107)
+2026-11-17 15:57:41 INFO  api      request id=a771 POST /webhooks/stripe 200 41ms
+2026-11-17 15:58:09 WARN  api      webhook signature check skipped for retry attempt=3 (BUG-109)
+2026-11-17 15:59:59 INFO  api      request id=b012 GET /health 200 2ms

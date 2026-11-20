@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: polymcp
+      POSTGRES_PASSWORD: polymcp
+      POSTGRES_DB: polymcp
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./seed/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polymcp -d polymcp"]
+      interval: 2s
+      timeout: 3s
+      retries: 20

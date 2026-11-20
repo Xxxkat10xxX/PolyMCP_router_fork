@@ -1,0 +1,41 @@
+{
+  "servers": {
+    "postgres": {
+      "description": "PostgreSQL database (read-only). Tables: users(id, email, country, plan, created_at), bugs(id like 'BUG-101', title, severity critical|high|medium|low, status open|in_progress|closed, component, reported_at, fixed_in_commit), deployments(id, service, version, status success|failed|rolled_back, deployed_at). Run SQL SELECTs, inspect schema, query plans, locks, table sizes.",
+      "command": "${PYTHON}",
+      "args": [
+        "servers/postgres_server.py"
+      ],
+      "env": {
+        "DATABASE_URL": "${DATABASE_URL}"
+      }
+    },
+    "shell": {
+      "description": "Sandboxed OS diagnostics. Files: logs/app.log, logs/worker.log (lines reference bug ids like BUG-101), config/app.yaml. Read and grep files, disk usage, processes, allow-listed read-only commands.",
+      "command": "${PYTHON}",
+      "args": [
+        "servers/shell_server.py"
+      ],
+      "env": {
+        "SHELL_SANDBOX_ROOT": "${SHELL_SANDBOX_ROOT:-sandbox}"
+      }
+    },
+    "github": {
+      "description": "GitHub (official github-mcp-server, read-only): repositories, commits, files, branches, issues, pull requests, releases, Actions workflow runs.",
+      "command": "${GITHUB_MCP_BIN:-github-mcp-server}",
+      "args": [
+        "stdio",
+        "--read-only",
+        "--toolsets=default,actions"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      },
+      "optional": true
+    }
+  },
+  "policy": {
+    "allow_write_tools": false,
+    "deny_tools": []
+  }
+}

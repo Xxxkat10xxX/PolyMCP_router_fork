@@ -1,0 +1,10 @@
+service: polymcp-demo
+environment: staging
+billing:
+  retry_attempts: 3
+  retry_timeout_seconds: 20
+auth:
+  refresh_token_ttl_minutes: 30
+worker:
+  concurrency: 8
+  redis_url: redis://redis:6379/0

@@ -1,0 +1,7 @@
+2026-11-05 09:15:02 INFO  worker v3.1.0 starting, concurrency=8
+2026-11-05 09:15:40 ERROR worker redis connection lost: failover in progress (BUG-104)
+2026-11-05 09:16:10 ERROR worker queue consumer stalled for 30s, no heartbeat (BUG-104)
+2026-11-05 09:17:00 INFO  worker shutting down v3.1.0
+2026-11-05 11:40:05 INFO  worker v3.1.1 starting, concurrency=8
+2026-11-05 11:40:30 INFO  worker redis reconnect with backoff enabled
+2026-11-12 03:12:44 WARN  worker memory usage 91% during csv export job=530 (BUG-111)
