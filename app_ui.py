@@ -146,7 +146,7 @@ def render_trace(trace: RunTrace, compact: bool) -> None:
         section("Граф плана", f"{len(trace.steps)} шагов")
         if trace.plan_reasoning:
             st.caption(trace.plan_reasoning)
-        st.graphviz_chart(plan_graph(trace.steps), use_container_width=True)
+        st.graphviz_chart(plan_graph(trace.steps), width="stretch")
 
     section("Шаги" if trace.mode == "polymcp" else "Вызовы", f"{len(trace.tools_called)} вызовов инструментов")
     for s in trace.steps:
@@ -169,7 +169,7 @@ def render_trace(trace: RunTrace, compact: bool) -> None:
         section("Расход по агентам")
         st.dataframe(
             pd.DataFrame([{"агент": k, **v.model_dump()} for k, v in trace.usage.items()]),
-            hide_index=True, use_container_width=True,
+            hide_index=True, width="stretch",
         )
 
 
@@ -211,14 +211,14 @@ def render_benchmarks() -> None:
                                delta_color="off", delta_arrow="off")
                 cols[3].metric("Время на задачу, с", f"{p['avg_wall_ms'] / 1000:.1f}",
                                f"baseline {b['avg_wall_ms'] / 1000:.1f}", delta_color="off", delta_arrow="off")
-        st.dataframe(summary_table(summary), use_container_width=True)
+        st.dataframe(summary_table(summary), width="stretch")
         per_task = pd.DataFrame([
             {"задача": r["task_id"], "категория": r["category"], "режим": r["mode"],
              "итог": "ok" if r["passed"] else "провал", "prompt": r["prompt_tokens"], "LLM": r["llm_calls"],
              "₽": r["cost_rub"], "с": round(r["wall_ms"] / 1000, 1), "замечания": "; ".join(r["failures"])}
             for r in report["results"]
         ])
-        st.dataframe(per_task, hide_index=True, use_container_width=True)
+        st.dataframe(per_task, hide_index=True, width="stretch")
 
 
 # ── Страница ─────────────────────────────────────────────────────────────────
@@ -264,10 +264,18 @@ def keys_form(first_run: bool) -> None:
         (st.success if gh_ok else st.warning)(gh_message + ("" if gh_ok else " Токен не сохранён."))
         if gh_ok:
             updates["GITHUB_PERSONAL_ACCESS_TOKEN"] = gh_token
-    path = secrets.save(updates)
+    try:
+        path = secrets.save(updates)
+    except Exception as exc:  # noqa: BLE001 — показываем причину, а не молча ничего не делаем
+        st.error(f"Не удалось сохранить ключи в {secrets.secrets_file()}: {type(exc).__name__}: {exc}")
+        st.exception(exc)
+        return
     inspect_servers.clear()
     where = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
     st.session_state["pm_flash"] = f"{message} Сохранено в {where}."
+    st.success(f"Ключи сохранены в {where}. Открываю приложение…")
+    # Обычно st.rerun сразу открывает основной экран; кнопка — на случай, если переход не сработал.
+    st.button("Открыть приложение", type="primary", key="pm_open_app")
     st.rerun()
 
 
@@ -343,7 +351,7 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     st.write("")
-    if st.button("Ключи и модель", use_container_width=True):
+    if st.button("Ключи и модель", width="stretch"):
         keys_dialog()
 
 if flash := st.session_state.pop("pm_flash", None):
