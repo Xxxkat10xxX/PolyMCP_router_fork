@@ -1,3 +1,5 @@
+# docker compose up --build        — база + приложение (UI на http://localhost:8501)
+# docker compose up -d postgres    — только демо-база для локальной разработки
 services:
   postgres:
     image: postgres:16-alpine
@@ -14,3 +16,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  app:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://polymcp:polymcp@postgres:5432/polymcp
+      GITHUB_MCP_BIN: /usr/local/bin/github-mcp-server
+      SHELL_SANDBOX_ROOT: /app/sandbox
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
