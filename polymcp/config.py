@@ -20,6 +20,7 @@ class Settings:
     timeout: float
     max_retries: int
     servers_config: str
+    reasoning: dict[str, str]  # агент -> reasoning_effort; "*" — для остальных; пусто — не отправлять
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -35,4 +36,21 @@ class Settings:
             timeout=float(os.getenv("POLYMCP_LLM_TIMEOUT", "60")),
             max_retries=int(os.getenv("POLYMCP_LLM_RETRIES", "2")),
             servers_config=os.getenv("POLYMCP_SERVERS_CONFIG", "mcp_servers.json"),
+            reasoning=parse_reasoning(os.getenv("POLYMCP_REASONING", DEFAULT_REASONING)),
         )
+
+
+# Рассуждения модели — основная статья расхода: у gpt-6-luna вызов с reasoning_effort=none стоит
+# ~0,01 ₽ против ~0,04 ₽ по умолчанию. Planner'у оставляем немного рассуждений: от плана зависит всё.
+DEFAULT_REASONING = "planner=minimal,*=none"
+
+
+def parse_reasoning(value: str) -> dict[str, str]:
+    """'planner=minimal,*=none' -> {'planner': 'minimal', '*': 'none'}. Пустая строка — не отправлять."""
+    result: dict[str, str] = {}
+    for part in value.split(","):
+        if "=" in part:
+            agent, effort = (x.strip() for x in part.split("=", 1))
+            if agent and effort:
+                result[agent] = effort
+    return result

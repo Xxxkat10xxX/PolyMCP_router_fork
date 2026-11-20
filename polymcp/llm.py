@@ -45,6 +45,11 @@ class MeteredLLM:
         self._llm = llm
         self.usage = usage
         self.model = llm.model
+        self.reasoning = llm.settings.reasoning
+
+    def _extra(self, agent: str) -> dict[str, Any]:
+        effort = self.reasoning.get(agent, self.reasoning.get("*"))
+        return {"reasoning_effort": effort} if effort else {}
 
     def _record(self, agent: str, response: Any, started: float) -> None:
         u = self.usage.setdefault(agent, AgentUsage())
@@ -65,7 +70,7 @@ class MeteredLLM:
             started = time.perf_counter()
             try:
                 response = await self._llm._client.chat.completions.parse(
-                    model=self.model, messages=messages, response_format=schema
+                    model=self.model, messages=messages, response_format=schema, **self._extra(agent)
                 )
             except (OpenAIError, ValidationError, json.JSONDecodeError) as exc:
                 self._record(agent, None, started)
@@ -86,7 +91,7 @@ class MeteredLLM:
         tool_choice: str | None = None,
     ) -> Any:
         """Обычный chat completion (с инструментами или без). Возвращает message."""
-        kwargs: dict[str, Any] = {"model": self.model, "messages": messages}
+        kwargs: dict[str, Any] = {"model": self.model, "messages": messages, **self._extra(agent)}
         if tools:
             kwargs["tools"] = tools
             if tool_choice:

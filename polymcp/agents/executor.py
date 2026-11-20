@@ -27,15 +27,28 @@ using the provided tools.
 - Fill only parameters you need; respect required fields, types and enums.
 - Prefer the single call that directly returns the data the step needs.
 - If a call failed, read the error and fix it (different arguments or another tool).
-- When the tool results already contain the data the step needs, reply with the single word DONE
-  and no tool call. Do not summarise.
+- When the tool results already contain what is needed, stop calling tools and reply with text in
+  the format given in the latest instruction.
 - If the step asks for something the tools cannot do or that would modify or destroy data
   (the tools are read-only), call refuse_step with the reason. Never substitute a different,
   harmless action for the one requested.
 Today is {today}."""
 
-CONTINUE = ("If the results above already contain what the step needs, reply DONE. "
-            "Otherwise make the next tool call.")
+# Завершающий ход шага сразу несёт пользу: факты для следующих шагов (вместо отдельного Condenser)
+# или финальный ответ, если план из одного шага (вместо отдельного Critic).
+CONTINUE_FACTS = (
+    "If the results above already contain what the step needs, reply WITHOUT a tool call with the facts "
+    "for the next agents: every relevant ID, number, name, date, path and status exactly as in the results, "
+    "at most ~120 words, in the user's language. If the results do not establish what the step asks, say "
+    "what they show and what remains unknown. Otherwise make the next tool call."
+)
+INCOMPLETE = "INCOMPLETE:"
+CONTINUE_ANSWER = (
+    "If the results above answer the original request, reply WITHOUT a tool call with the final answer for "
+    "the user, in the user's language, using only these results and never inventing data. If the needed "
+    f"data cannot be obtained with these tools, start the reply with {INCOMPLETE} and say what is missing. "
+    "Otherwise make the next tool call."
+)
 
 REFUSE_TOOL = {
     "type": "function",
@@ -60,12 +73,18 @@ class Executor:
         self.max_attempts = max_attempts  # сколько ошибок подряд допускается
         self.max_calls = max_calls  # сколько всего вызовов на шаг
 
-    async def run(self, query: str, trace: StepTrace, selection: Selection, dep_facts: dict[int, str]) -> str:
-        """Выполняет шаг и возвращает сырые ответы успешных вызовов ("" при неудаче)."""
+    async def run(
+        self, query: str, trace: StepTrace, selection: Selection, dep_facts: dict[int, str], final: bool = False
+    ) -> tuple[str, str | None]:
+        """Выполняет шаг. Возвращает (сырые ответы успешных вызовов, завершающий текст модели или None).
+
+        final=True — шаг единственный в плане: завершающий текст будет финальным ответом пользователю.
+        """
         step = trace.step
+        continue_prompt = CONTINUE_ANSWER if final else CONTINUE_FACTS
         if not selection.tools:
             trace.status, trace.error = StepStatus.failed, f"Нет инструментов для сервера {step.server!r}"
-            return ""
+            return "", None
 
         facts = "\n".join(f"[step {i}] {f}" for i, f in dep_facts.items()) or "none"
         messages: list[dict] = [
@@ -81,6 +100,7 @@ class Executor:
         ]
         outputs: list[str] = []
         consecutive_errors = 0
+        closing: str | None = None
 
         for call_no in range(1, self.max_calls + 1):
             first = call_no == 1
@@ -92,6 +112,7 @@ class Executor:
             if not message.tool_calls:
                 if first:
                     raise LLMError(f"[{agent}] модель не вызвала инструмент: {(message.content or '')[:200]}")
+                closing = (message.content or "").strip() or None
                 break  # модель считает, что цель шага достигнута
 
             tc = message.tool_calls[0]
@@ -103,7 +124,7 @@ class Executor:
                 reason = reason or "агент отказался выполнять шаг"
                 trace.guard = GuardVerdict(allowed=False, reason=f"Отказ агента: {reason}")
                 trace.status, trace.error = StepStatus.blocked, f"Отказ агента: {reason}"
-                return "\n\n".join(outputs)
+                return "\n\n".join(outputs), None
             spec = selection.by_qualified_name(tc.function.name)
             parse_error = ""
             try:
@@ -131,7 +152,7 @@ class Executor:
                 trace.attempts.append(Attempt(call=call, ok=False, output=f"BLOCKED: {verdict.reason}",
                                               output_tokens=0, latency_ms=0))
                 trace.status, trace.error = StepStatus.blocked, verdict.reason
-                return ""
+                return "", None
 
             if parse_error:
                 ok, output, latency = False, parse_error, 0
@@ -145,7 +166,7 @@ class Executor:
             if ok:
                 consecutive_errors = 0
                 outputs.append(clipped)
-                content = f"{clipped}\n\n{CONTINUE}"
+                content = f"{clipped}\n\n{continue_prompt}"
             else:
                 consecutive_errors += 1
                 if consecutive_errors >= self.max_attempts:
@@ -162,7 +183,7 @@ class Executor:
         else:
             trace.status = StepStatus.failed
             trace.error = f"Не удалось выполнить шаг: {trace.attempts[-1].output[:300]}"
-        return "\n\n".join(outputs)
+        return "\n\n".join(outputs), closing
 
 
 def describe_call(call: ToolCall) -> str:

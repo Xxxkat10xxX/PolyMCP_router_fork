@@ -40,8 +40,11 @@ class Condenser:
     def __init__(self, llm: MeteredLLM) -> None:
         self.llm = llm
 
-    async def condense(self, query: str, trace: StepTrace, raw_output: str) -> None:
-        if trace.status is not StepStatus.ok:
+    async def condense(self, query: str, trace: StepTrace, raw_output: str, closing: str | None = None) -> None:
+        if trace.status is StepStatus.ok and closing:
+            # Executor уже написал факты завершающим ходом — отдельный вызов модели не нужен.
+            trace.facts = closing
+        elif trace.status is not StepStatus.ok:
             trace.facts = f"{trace.status.value.upper()}: {trace.error}"
         elif count_tokens(raw_output) <= PASS_THROUGH_TOKENS:
             trace.facts = raw_output.strip() or "(empty result)"

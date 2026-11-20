@@ -2,6 +2,10 @@
 
 Независимые шаги DAG выполняются параллельно волнами. Если Critic считает ответ
 неполным, Planner достраивает план (не больше max_replans раз).
+
+Экономия вызовов модели: завершающий ход Executor сразу пишет факты шага (Condenser
+вызывается только как запасной путь), а если план из одного шага — финальный ответ,
+и тогда Critic не нужен. Critic подключается для многошаговых планов, неполных ответов и сбоев.
 """
 
 from __future__ import annotations
@@ -11,7 +15,7 @@ import time
 from typing import Any, Callable
 
 from .agents.condenser import Condenser, Critic
-from .agents.executor import Executor
+from .agents.executor import INCOMPLETE, Executor
 from .agents.planner import Planner
 from .agents.selector import Selector
 from .contracts import PlanStep, RunTrace, StepStatus, StepTrace
@@ -40,7 +44,11 @@ class Router:
             plan = await planner.plan(query)
             trace.plan_reasoning = plan.reasoning
             emit("plan", plan)
-            await self._execute(query, plan.steps, trace, executor, condenser, emit)
+            single = len(plan.steps) == 1
+            closings = await self._execute(query, plan.steps, trace, executor, condenser, emit, final=single)
+
+            if single and self._answer_single_step(trace, closings.get(plan.steps[0].id)):
+                return trace
 
             while True:
                 verdict = await critic.review(query, trace.steps)
@@ -54,21 +62,42 @@ class Router:
         except LLMError as exc:
             trace.error = str(exc)
         finally:
-            trace.wall_ms = int((time.perf_counter() - started) * 1000)
-            trace.blocked = any(s.status is StepStatus.blocked for s in trace.steps)
-            trace.tools_called = [
-                f"{a.call.server}.{a.call.tool}"
-                for s in trace.steps for a in s.attempts if not a.output.startswith("BLOCKED")
-            ]
-        emit("done", trace)
+            self._finalize(trace, started, emit)
         return trace
 
-    async def _execute(self, query, steps: list[PlanStep], trace: RunTrace, executor, condenser, emit) -> None:
+    @staticmethod
+    def _answer_single_step(trace: RunTrace, closing: str | None) -> bool:
+        """План из одного шага: ответ без отдельного вызова Critic. False — нужен Critic."""
+        step = trace.steps[0]
+        if step.status is StepStatus.blocked:
+            reason = step.error.removeprefix("Отказ агента:").strip()
+            trace.answer, trace.complete = f"Не выполнено. {reason}", True
+            return True
+        if step.status is StepStatus.ok and closing and not closing.startswith(INCOMPLETE):
+            trace.answer, trace.complete = closing, True
+            return True
+        return False
+
+    @staticmethod
+    def _finalize(trace: RunTrace, started: float, emit: EventHandler) -> None:
+        trace.wall_ms = int((time.perf_counter() - started) * 1000)
+        trace.blocked = any(s.status is StepStatus.blocked for s in trace.steps)
+        trace.tools_called = [
+            f"{a.call.server}.{a.call.tool}"
+            for s in trace.steps for a in s.attempts if not a.output.startswith("BLOCKED")
+        ]
+        emit("done", trace)
+
+    async def _execute(
+        self, query, steps: list[PlanStep], trace: RunTrace, executor, condenser, emit, final: bool = False
+    ) -> dict[int, str | None]:
+        """Выполняет шаги волнами. Возвращает завершающие тексты Executor по id шага."""
         by_id = {s.step.id: s for s in trace.steps}
         new = [StepTrace(step=step) for step in steps]
         trace.steps.extend(new)
         by_id.update({s.step.id: s for s in new})
         pending = list(new)
+        closings: dict[int, str | None] = {}
 
         async def run_step(st: StepTrace) -> None:
             emit("step_start", st)
@@ -76,8 +105,9 @@ class Router:
             st.candidates = [t.qualified_name for t in selection.tools]
             st.schema_tokens_raw, st.schema_tokens_pruned = selection.raw_tokens, selection.pruned_tokens
             dep_facts = {d: by_id[d].facts for d in st.step.depends_on if d in by_id}
-            raw = await executor.run(query, st, selection, dep_facts)
-            await condenser.condense(query, st, raw)
+            raw, closing = await executor.run(query, st, selection, dep_facts, final=final)
+            closings[st.step.id] = closing
+            await condenser.condense(query, st, raw, closing)
             emit("step_done", st)
 
         while pending:
@@ -87,3 +117,4 @@ class Router:
                 wave = pending[:1]
             await asyncio.gather(*(run_step(s) for s in wave))
             pending = [s for s in pending if s not in wave]
+        return closings
