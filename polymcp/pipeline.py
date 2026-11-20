@@ -35,7 +35,7 @@ class Router:
 
     async def run(self, query: str, on_event: EventHandler | None = None) -> RunTrace:
         emit = on_event or (lambda kind, payload: None)
-        trace = RunTrace(query=query, mode="polymcp", model=self.llm.model)
+        trace = RunTrace(query=query, mode="polymcp", model=self.llm.label)
         llm = self.llm.metered(trace.usage)
         planner, executor = Planner(llm, self.hub), Executor(llm, self.hub, self.max_attempts)
         condenser, critic = Condenser(llm), Critic(llm)

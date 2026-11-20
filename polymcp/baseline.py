@@ -22,7 +22,7 @@ Answer in the user's language. Today is {today}."""
 
 
 async def run_baseline(hub: MCPHub, llm: LLM, query: str, max_turns: int = 10) -> RunTrace:
-    trace = RunTrace(query=query, mode="baseline", model=llm.model)
+    trace = RunTrace(query=query, mode="baseline", model=llm.label)
     metered = llm.metered(trace.usage)
     tools = [openai_tool(t, pruned=False) for t in hub.tools.values()]
     schema_tokens = count_tokens(tools)

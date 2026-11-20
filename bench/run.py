@@ -170,7 +170,7 @@ async def main_async(args: argparse.Namespace) -> None:
     rows.sort(key=lambda r: (r["mode"], r["task_id"]))
     report = {
         "created_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
-        "model": settings.model,
+        "model": llm.label,
         "config": config_path.name,
         "servers": hub.servers,
         "tool_count": len(hub.tools),

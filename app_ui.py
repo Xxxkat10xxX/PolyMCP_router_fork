@@ -120,7 +120,10 @@ def metric_cards(trace: RunTrace, band_key: str | None) -> None:
         c[0].metric("LLM-вызовов", trace.llm_calls)
         c[1].metric("Prompt-токенов", fmt_int(trace.prompt_tokens))
         c[2].metric("Completion", fmt_int(trace.completion_tokens))
-        c[3].metric("Стоимость, ₽", f"{trace.cost_rub:.2f}")
+        free = trace.model.startswith("gigachat") and not trace.cost_rub
+        c[3].metric("Стоимость, ₽", "квота" if free else f"{trace.cost_rub:.2f}",
+                    help="GigaChat не сообщает стоимость: токены списываются из пакета или бесплатной квоты."
+                    if free else None)
         c[4].metric("Время, с", f"{trace.wall_ms / 1000:.1f}")
 
 
@@ -167,9 +170,13 @@ def render_trace(trace: RunTrace, compact: bool) -> None:
 
     if trace.usage:
         section("Расход по агентам")
-        st.dataframe(
-            pd.DataFrame([{"агент": k, **v.model_dump()} for k, v in trace.usage.items()]),
-            hide_index=True, width="stretch",
+        st.table(
+            pd.DataFrame([
+                {"агент": k, "вызовов": v.calls, "prompt": v.prompt_tokens, "completion": v.completion_tokens,
+                 "время, с": round(v.latency_ms / 1000, 1), "₽": round(v.cost_rub, 2)}
+                for k, v in trace.usage.items()
+            ]),
+            hide_index=True,
         )
 
 
@@ -211,53 +218,94 @@ def render_benchmarks() -> None:
                                delta_color="off", delta_arrow="off")
                 cols[3].metric("Время на задачу, с", f"{p['avg_wall_ms'] / 1000:.1f}",
                                f"baseline {b['avg_wall_ms'] / 1000:.1f}", delta_color="off", delta_arrow="off")
-        st.dataframe(summary_table(summary), width="stretch")
+        # st.table, а не st.dataframe: у интерактивной таблицы своя прокрутка, она перехватывает колесо мыши
+        st.table(summary_table(summary))
         per_task = pd.DataFrame([
             {"задача": r["task_id"], "категория": r["category"], "режим": r["mode"],
              "итог": "ok" if r["passed"] else "провал", "prompt": r["prompt_tokens"], "LLM": r["llm_calls"],
              "₽": r["cost_rub"], "с": round(r["wall_ms"] / 1000, 1), "замечания": "; ".join(r["failures"])}
             for r in report["results"]
         ])
-        st.dataframe(per_task, hide_index=True, width="stretch")
+        st.table(per_task, hide_index=True)
 
 
 # ── Страница ─────────────────────────────────────────────────────────────────
 
+PROVIDER_LABELS = {"aitunnel": "aitunnel (OpenAI-совместимый)", "gigachat": "GigaChat (Сбер)"}
+GIGACHAT_MODELS = ["GigaChat-2", "GigaChat-2-Pro", "GigaChat-2-Max"]
+
+
 def keys_form(first_run: bool) -> None:
     """Форма ключей: проверяет реальным запросом и сохраняет в .polymcp/secrets.env."""
-    current_base = os.getenv("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1/")
-    current_model = os.getenv("POLYMCP_MODEL", "gpt-6-luna")
-    has_key = bool(os.getenv("AITUNNEL_API_KEY", "").strip())
-    with st.form("pm_keys", border=False):
-        api_key = st.text_input(
-            "Ключ aitunnel" + ("" if first_run else f" · сейчас {secrets.mask(os.getenv('AITUNNEL_API_KEY'))}"),
-            type="password", placeholder="sk-aitunnel-…" if first_run else "оставьте пустым, чтобы не менять",
-            help="Личный кабинет aitunnel.ru → API-ключи.",
-        )
+    saved_provider = os.getenv("POLYMCP_PROVIDER", "aitunnel")
+    provider = st.radio(
+        "Провайдер модели", list(PROVIDER_LABELS), format_func=PROVIDER_LABELS.get, horizontal=True,
+        index=list(PROVIDER_LABELS).index(saved_provider) if saved_provider in PROVIDER_LABELS else 0,
+        key=f"pm_provider_{'first' if first_run else 'dialog'}",
+        help="GigaChat: бесплатная квота для физлиц (Freemium). aitunnel: доступ к gpt-6-luna и другим моделям.",
+    )
+    same_provider = provider == saved_provider
+    current_model = os.getenv("POLYMCP_MODEL", "") if same_provider else ""
+
+    with st.form(f"pm_keys_{provider}", border=False):
+        if provider == "gigachat":
+            current_key = os.getenv("GIGACHAT_CREDENTIALS", "")
+            api_key = st.text_input(
+                "Ключ авторизации GigaChat" + (f" · сейчас {secrets.mask(current_key)}" if current_key else ""),
+                type="password", placeholder="оставьте пустым, чтобы не менять" if current_key else "MDE5…==",
+                help="developers.sber.ru → GigaChat API → «Получить ключ» → Authorization key (строка в base64). "
+                     "Не путайте с Client Secret.",
+            )
+            scopes = ["GIGACHAT_API_PERS", "GIGACHAT_API_B2B", "GIGACHAT_API_CORP"]
+            scope_now = os.getenv("GIGACHAT_SCOPE", "GIGACHAT_API_PERS")
+            scope = st.selectbox("Тип доступа (scope)", scopes, index=scopes.index(scope_now) if scope_now in scopes else 0,
+                                 help="Физлица — GIGACHAT_API_PERS, ИП и юрлица — B2B (пакеты) или CORP (оплата по факту).")
+            model_index = GIGACHAT_MODELS.index(current_model) if current_model in GIGACHAT_MODELS else 1
+            model = st.selectbox("Модель", GIGACHAT_MODELS, index=model_index,
+                                 help="Pro — баланс качества и квоты. Lite (GigaChat-2) дешевле, Max — точнее.")
+            base_url = ""
+        else:
+            current_key = os.getenv("AITUNNEL_API_KEY", "")
+            current_key = "" if current_key.startswith("your_") else current_key
+            api_key = st.text_input(
+                "Ключ aitunnel" + (f" · сейчас {secrets.mask(current_key)}" if current_key else ""),
+                type="password", placeholder="оставьте пустым, чтобы не менять" if current_key else "sk-aitunnel-…",
+                help="Личный кабинет aitunnel.ru → API-ключи.",
+            )
+            with st.expander("Адрес API и модель"):
+                base_url = st.text_input("Адрес API (OpenAI-совместимый)",
+                                         value=os.getenv("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1/"))
+                model = st.text_input("Модель", value=current_model or "gpt-6-luna")
+            scope = ""
+        gh_now = os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN", "")
+        gh_now = "" if gh_now.startswith("your_") else gh_now
         gh_token = st.text_input(
-            f"GitHub-токен (необязательно) · сейчас {secrets.mask(os.getenv('GITHUB_PERSONAL_ACCESS_TOKEN'))}",
+            f"GitHub-токен (необязательно) · сейчас {secrets.mask(gh_now)}",
             type="password", placeholder="github_pat_…",
             help="Fine-grained токен только на чтение: github.com → Settings → Developer settings → "
                  "Personal access tokens. Без него сервер GitHub будет недоступен, остальное работает.",
         )
-        with st.expander("Провайдер и модель"):
-            base_url = st.text_input("Адрес API (OpenAI-совместимый)", value=current_base)
-            model = st.text_input("Модель", value=current_model)
         submitted = st.form_submit_button("Проверить и сохранить", type="primary")
 
     if not submitted:
         return
-    key_to_check = api_key.strip() or (os.getenv("AITUNNEL_API_KEY", "") if has_key else "")
+    key_to_check = api_key.strip() or current_key
     if not key_to_check:
-        st.error("Введите ключ aitunnel.")
+        st.error("Введите ключ.")
         return
-    updates: dict[str, str] = {}
     with st.spinner("Проверяю ключ…"):
-        ok, message = secrets.check_aitunnel(key_to_check, base_url.strip(), model.strip())
+        if provider == "gigachat":
+            ok, message = secrets.check_gigachat(key_to_check, scope, model)
+        else:
+            ok, message = secrets.check_aitunnel(key_to_check, base_url.strip(), model.strip())
     (st.success if ok else st.error)(message)
     if not ok:
         return
-    updates.update({"AITUNNEL_API_KEY": api_key, "AITUNNEL_BASE_URL": base_url, "POLYMCP_MODEL": model})
+    updates: dict[str, str] = {"POLYMCP_PROVIDER": provider, "POLYMCP_MODEL": model}
+    if provider == "gigachat":
+        updates.update({"GIGACHAT_CREDENTIALS": api_key, "GIGACHAT_SCOPE": scope})
+    else:
+        updates.update({"AITUNNEL_API_KEY": api_key, "AITUNNEL_BASE_URL": base_url})
     if gh_token.strip():
         with st.spinner("Проверяю GitHub-токен…"):
             gh_ok, gh_message = secrets.check_github(gh_token.strip())
@@ -292,8 +340,8 @@ except ConfigError:
 <div class="pm-hero">
   <span class="pm-tag"><span class="pm-dot"></span>Первый запуск</span>
   <h1>Подключите модель.</h1>
-  <p class="pm-lead">Нужен ключ aitunnel — через него агенты обращаются к модели. Ключ проверяется
-  реальным запросом и хранится только у вас, в <code>.polymcp/secrets.env</code>.</p>
+  <p class="pm-lead">Нужен ключ модели: aitunnel или GigaChat (у Сбера есть бесплатная квота для физлиц).
+  Ключ проверяется реальным запросом и хранится только у вас, в <code>.polymcp/secrets.env</code>.</p>
 </div>
 """,
         unsafe_allow_html=True,
@@ -347,7 +395,8 @@ with st.sidebar:
         st.caption(f"{name}: {reason}")
     st.markdown(
         f'<div class="pm-note">Каталог: {info["tool_count"]} инструментов, {fmt_int(info["catalog_tokens"])} токенов схем.'
-        f'<br>Модель: <code>{esc(settings.model)}</code> · ключ {esc(secrets.mask(settings.api_key))}</div>',
+        f'<br>Модель: <code>{esc(settings.provider)} · {esc(settings.model)}</code>'
+        f' · ключ {esc(secrets.mask(settings.api_key))}</div>',
         unsafe_allow_html=True,
     )
     st.write("")

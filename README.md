@@ -10,7 +10,7 @@ PolyMCP раскладывает запрос на шаги, для каждог
 ![Python](https://img.shields.io/badge/python-3.12%2B-18181b?style=flat-square)
 ![MCP](https://img.shields.io/badge/MCP-stdio-f26d5b?style=flat-square)
 ![Streamlit](https://img.shields.io/badge/UI-Streamlit-18181b?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-28%20passed-f26d5b?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-40%20passed-f26d5b?style=flat-square)
 
 <img src="docs/img/hero.jpg" alt="Главный экран PolyMCP Router" width="900">
 
@@ -42,6 +42,8 @@ PolyMCP показывает модели только 5 нужных инстр
 - **Self-healing.** Если сервер вернул ошибку, модель видит её текст и исправляет вызов.
 - **Три слоя защиты.** Отказ агента, Policy Guard в коде и read-only на стороне серверов.
 - **Честные цифры.** Бенчмарк сверяет ответы с данными и сравнивает с обычным клиентом на той же модели.
+- **Два провайдера модели.** aitunnel (`gpt-6-luna` и любой OpenAI-совместимый API) или GigaChat от Сбера
+  с бесплатной квотой для физлиц. Модель можно задать отдельно для каждого агента.
 - **Ключи через интерфейс.** Ключ проверяется реальным запросом и хранится только у вас.
 
 ## ● Быстрый старт
@@ -68,7 +70,8 @@ docker compose up --build
 
 | Что | Где взять | Обязательно |
 |---|---|---|
-| Ключ aitunnel | личный кабинет [aitunnel.ru](https://aitunnel.ru) → API-ключи | да |
+| Ключ aitunnel **или** | личный кабинет [aitunnel.ru](https://aitunnel.ru) → API-ключи | одно из двух |
+| ключ авторизации GigaChat | [developers.sber.ru](https://developers.sber.ru) → GigaChat API → «Получить ключ» → Authorization key | одно из двух |
 | GitHub-токен | github.com → Settings → Developer settings → Personal access tokens (fine-grained, только чтение) | нет, без него не будет сервера GitHub |
 
 Ключ проверяется запросом к провайдеру и сохраняется в `.polymcp/secrets.env`: файл не попадает в git,
@@ -121,7 +124,7 @@ flowchart LR
 |---|---|---|
 | `postgres` | `servers/postgres_server.py` (FastMCP + psycopg) | `run_select`, `describe_table`, `list_tables`, `explain_query`, `active_locks`, `table_sizes` |
 | `shell` | `servers/shell_server.py` (песочница `sandbox/`) | `grep_files`, `tail_file`, `list_dir`, `disk_usage`, `process_list`, `run_command` |
-| `github` | github-mcp-server v1.14.0, `--read-only` | 30 (`mcp_servers.json`) или 69 (`mcp_servers.large.json`) |
+| `github` | github-mcp-server v1.14.0, `--read-only` | 30 (`mcp_servers.json`) или 57 (`mcp_servers.large.json`, все toolsets) |
 
 ## ● Бенчмарк
 
@@ -164,16 +167,47 @@ flowchart LR
   разница на 42 инструментах в пределах шума. На 69 инструментах PolyMCP дешевле.
 - Сжатие схем само по себе даёт ~27%, основная экономия — от отбора инструментов.
 
+## ● GigaChat
+
+Выберите в форме ключей «GigaChat (Сбер)», вставьте **Authorization key** (строка в base64 из личного
+кабинета, не Client Secret) и выберите модель. Физлицам доступна бесплатная квота (Freemium).
+
+Как это устроено (`polymcp/gigachat.py`):
+
+- ключ авторизации обменивается на токен доступа (`ngw.devices.sberbank.ru:9443/api/v2/oauth`); токен живёт
+  30 минут и обновляется сам — заранее и при ответе 401;
+- инструменты передаются как GigaChat `functions`, ответы и результаты функций переводятся в формат, который
+  понимают агенты, так что остальной код не знает, с каким провайдером работает;
+- structured output — принудительный вызов функции-ответа со схемой; JSON Schema упрощается до подмножества,
+  которое GigaChat принимает (`$ref` раскрываются, `anyOf` с `null` убираются);
+- по умолчанию один запрос к модели одновременно (`POLYMCP_MAX_CONCURRENCY=1`): у Freemium ограничен
+  параллелизм. Шаги плана от этого выполняются по очереди;
+- стоимость GigaChat не сообщает — в интерфейсе вместо рублей написано «квота».
+
+Разным агентам можно дать разные модели: `POLYMCP_MODELS=planner=GigaChat-2-Max,*=GigaChat-2`.
+
+Если при проверке ключа появляется ошибка TLS-сертификата, установите корневой сертификат НУЦ Минцифры
+([gosuslugi.ru/crt](https://www.gosuslugi.ru/crt)) и укажите путь к нему в `GIGACHAT_CA_BUNDLE`.
+
+> Интеграция проверена тестами на имитации API по протоколу официального SDK `gigachat` 0.2.x, включая
+> полный прогон конвейера. Бенчмарк на живом GigaChat ещё не запускался — числа в таблице выше для `gpt-6-luna`.
+
 ## ● Настройка
 
-Всё, кроме ключей, задаётся переменными окружения или в `.env`:
+Всё, кроме ключей, задаётся переменными окружения или в `.env` (пустое значение = по умолчанию):
 
 | Переменная | По умолчанию | Что делает |
 |---|---|---|
-| `AITUNNEL_API_KEY` | — | ключ модели (удобнее задать в интерфейсе) |
+| `POLYMCP_PROVIDER` | `aitunnel` | `aitunnel` или `gigachat` |
+| `AITUNNEL_API_KEY` | — | ключ aitunnel (удобнее задать в интерфейсе) |
 | `AITUNNEL_BASE_URL` | `https://api.aitunnel.ru/v1/` | любой OpenAI-совместимый API |
-| `POLYMCP_MODEL` | `gpt-6-luna` | модель |
-| `POLYMCP_REASONING` | `planner=minimal,*=none` | `reasoning_effort` по агентам; пусто — не отправлять |
+| `GIGACHAT_CREDENTIALS` | — | ключ авторизации GigaChat (удобнее задать в интерфейсе) |
+| `GIGACHAT_SCOPE` | `GIGACHAT_API_PERS` | `GIGACHAT_API_PERS` / `B2B` / `CORP` |
+| `GIGACHAT_CA_BUNDLE` | — | путь к сертификату НУЦ Минцифры, если не проходит TLS |
+| `POLYMCP_MODEL` | `gpt-6-luna` / `GigaChat-2-Pro` | модель по умолчанию |
+| `POLYMCP_MODELS` | — | модели по агентам: `planner=GigaChat-2-Max,*=GigaChat-2` |
+| `POLYMCP_REASONING` | aitunnel: `planner=minimal,*=none` | `reasoning_effort` по агентам; `off` — не отправлять |
+| `POLYMCP_MAX_CONCURRENCY` | aitunnel: без ограничения, GigaChat: `1` | одновременных запросов к модели |
 | `DATABASE_URL` | `postgresql://polymcp:polymcp@localhost:5432/polymcp` | база для сервера `postgres` |
 | `GITHUB_PERSONAL_ACCESS_TOKEN` | — | токен для сервера `github` |
 | `GITHUB_MCP_BIN` | `github-mcp-server` | путь к бинарнику GitHub MCP-сервера |
@@ -233,7 +267,7 @@ python -m bench.run --config mcp_servers.large.json
 ### Структура
 
 ```
-polymcp/            ядро: агенты, хаб MCP, клиент LLM, конвейер, baseline, CLI
+polymcp/            ядро: агенты, хаб MCP, клиент LLM (aitunnel, GigaChat), конвейер, baseline, CLI
   agents/           planner · selector · executor (+ synthesizer) · guard · condenser (+ critic)
 servers/            свои MCP-серверы: postgres, shell
 app_ui.py           интерфейс (Streamlit)    ui/style.css · .streamlit/config.toml · static/fonts

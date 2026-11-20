@@ -15,7 +15,12 @@ import httpx
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parent.parent
-MANAGED_KEYS = ("AITUNNEL_API_KEY", "AITUNNEL_BASE_URL", "POLYMCP_MODEL", "GITHUB_PERSONAL_ACCESS_TOKEN")
+MANAGED_KEYS = (
+    "POLYMCP_PROVIDER", "POLYMCP_MODEL",
+    "AITUNNEL_API_KEY", "AITUNNEL_BASE_URL",
+    "GIGACHAT_CREDENTIALS", "GIGACHAT_SCOPE",
+    "GITHUB_PERSONAL_ACCESS_TOKEN",
+)
 
 
 def secrets_file() -> Path:
@@ -104,3 +109,28 @@ def check_github(token: str) -> tuple[bool, str]:
     if response.status_code in (401, 403):
         return False, "Токен не подошёл: GitHub ответил 401/403."
     return False, f"GitHub ответил {response.status_code}."
+
+
+def check_gigachat(credentials: str, scope: str, model: str) -> tuple[bool, str]:
+    """Получает токен по ключу авторизации и проверяет, что модель есть в списке."""
+    import asyncio
+
+    from .config import GIGACHAT_AUTH_URL, GIGACHAT_BASE_URL, Settings
+    from .gigachat import list_models
+    from .llm import LLMError
+
+    ca_bundle = os.getenv("GIGACHAT_CA_BUNDLE", "").strip()
+    settings = Settings(
+        provider="gigachat", api_key=credentials.strip(),
+        base_url=os.getenv("GIGACHAT_BASE_URL", "").strip() or GIGACHAT_BASE_URL, model=model, timeout=20, max_retries=0,
+        servers_config="", reasoning={}, gigachat_scope=scope,
+        gigachat_auth_url=os.getenv("GIGACHAT_AUTH_URL", "").strip() or GIGACHAT_AUTH_URL,
+        tls_verify=ca_bundle or os.getenv("GIGACHAT_VERIFY_SSL", "true").lower() != "false",
+    )
+    try:
+        models = asyncio.run(list_models(settings))
+    except LLMError as exc:
+        return False, str(exc)
+    if models and model not in models:
+        return False, f"Ключ рабочий, но модели {model!r} нет. Доступны: {', '.join(models)}."
+    return True, f"Ключ GigaChat рабочий, модель {model} доступна."
