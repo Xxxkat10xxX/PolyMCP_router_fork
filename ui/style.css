@@ -69,10 +69,11 @@ h2, h3 { text-transform: uppercase; }
   font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
   transition: transform .12s ease, box-shadow .12s ease;
 }
-.stButton > button[kind="primary"] { background: var(--ink); color: var(--paper); padding: .7rem 2.4rem; }
-.stButton > button[kind="primary"]:hover { background: var(--ink); color: var(--paper); border-color: var(--ink); }
-.stButton > button:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
-.stButton > button:active { transform: translate(4px, 4px); box-shadow: none; }
+.stButton > button[kind="primary"], .stFormSubmitButton > button {
+  background: var(--ink) !important; color: var(--paper) !important; padding: .7rem 2.4rem;
+}
+.stButton > button:hover, .stFormSubmitButton > button:hover { transform: translate(2px, 2px); box-shadow: 2px 2px 0 var(--ink); }
+.stButton > button:active, .stFormSubmitButton > button:active { transform: translate(4px, 4px); box-shadow: none; }
 .stButton > button:disabled { opacity: .45; box-shadow: none; }
 
 /* ── Поля ввода ──────────────────────────────────────────── */

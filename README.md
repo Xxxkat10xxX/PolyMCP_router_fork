@@ -1,113 +1,226 @@
-# PolyMCP Router
+<div align="center">
 
-Пять LLM-агентов маршрутизируют запрос пользователя по **настоящим** MCP-серверам: PostgreSQL,
-shell в песочнице и официальный GitHub MCP-сервер. Модель — `gpt-6-luna` через aitunnel.
+# ● PolyMCP Router
 
-Это переписанная с нуля версия [Xxxkat10xxX/PolyMCP_router](https://github.com/Xxxkat10xxX/PolyMCP_router).
-В старой версии бенчмарк не вызывал LLM (`set_fast_benchmark_mode(True)` → заготовленные ответы),
-ответы MCP-серверов генерировались шаблоном, а метрики (сжатие 66%, Recall 100%, self-healing)
-были заложены в код. Здесь каждая цифра получена реальным прогоном, а ответы проверяются по данным.
+**Один запрос. Пять агентов. Настоящие MCP-серверы.**
 
-## Как это работает
+PolyMCP раскладывает запрос на шаги, для каждого шага выбирает нужные инструменты
+из каталога MCP-серверов и отвечает только тем, что серверы действительно вернули.
 
-```
-запрос ─► 1. Planner ──► DAG шагов (шаг = один сервер), независимые шаги идут параллельно
-              │
-              ▼  для каждого шага
-          2. Selector / Schema Pruner ── BM25 отбирает top-5 инструментов сервера и сжимает их JSON Schema
-          3. Synthesizer + Policy Guard ── function calling выбирает инструмент и аргументы;
-                                           guard (код, не LLM) блокирует запись и опасные команды
-          4. Self-Healing Executor ──────── реальный вызов MCP; ошибку сервера модель видит и исправляет вызов;
-                                           шаг закрывается, только когда модель подтверждает, что цель достигнута
-          5. Condenser ───────────────────── сжимает длинный ответ сервера в факты для зависимых шагов
-              │
-              ▼
-          5. Critic ──► финальный ответ только по фактам; если данных не хватает → Planner достраивает план
-```
+![Python](https://img.shields.io/badge/python-3.12%2B-18181b?style=flat-square)
+![MCP](https://img.shields.io/badge/MCP-stdio-f26d5b?style=flat-square)
+![Streamlit](https://img.shields.io/badge/UI-Streamlit-18181b?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-28%20passed-f26d5b?style=flat-square)
 
-| # | Агент | Модуль |
+<img src="docs/img/hero.jpg" alt="Главный экран PolyMCP Router" width="900">
+
+</div>
+
+---
+
+## Зачем
+
+Обычный MCP-клиент отдаёт модели **все** инструменты всех серверов сразу. На трёх серверах это
+8–14 тысяч токенов схем в каждом запросе, и чем больше серверов, тем дороже и медленнее.
+
+PolyMCP показывает модели только 5 нужных инструментов на шаг, со сжатыми схемами:
+
+| | Обычный клиент | PolyMCP |
 |---|---|---|
-| 1 | Planner (DAG, re-planning) | `polymcp/agents/planner.py` |
-| 2 | Selector + Schema Pruner | `polymcp/agents/selector.py` |
-| 3 | Arg Synthesizer + Policy Guard | `polymcp/agents/executor.py`, `polymcp/agents/guard.py` |
-| 4 | Self-Healing Executor | `polymcp/agents/executor.py` |
-| 5 | Condenser + Critic | `polymcp/agents/condenser.py` |
+| Входных токенов на запрос (42 инструмента) | 32 718 | **3 505** |
+| Входных токенов на запрос (69 инструментов) | 48 215 | **4 318** |
+| Стоимость 17 задач, 69 инструментов | 2,84 ₽ | **2,54 ₽** |
+| Безопасность (отказ от удаления, данные целы) | 4/4 | 4/4 |
 
-Остальное: `polymcp/hub.py` — stdio-подключения к MCP-серверам и реестр инструментов из `list_tools`;
-`polymcp/llm.py` — клиент aitunnel (structured outputs, учёт токенов и стоимости по агентам);
-`polymcp/pipeline.py` — оркестрация; `polymcp/baseline.py` — базовая линия для сравнения.
+Подробности и честные оговорки — в разделе [Бенчмарк](#-бенчмарк).
 
-### Безопасность — три слоя
+## ● Возможности
 
-1. **Агент** может отказаться от шага (`refuse_step`), если тот требует записи или удаления.
-2. **Policy Guard** — детерминированный код: разрешены только инструменты с `readOnlyHint`, SQL без
-   изменяющих операций, shell-команды без `rm`, перенаправлений и т. п. (`mcp_servers.json` → `policy`).
-3. **Серверы**: Postgres открывает только read-only транзакции, shell не выходит за песочницу и
-   запускает команды из белого списка, GitHub-сервер работает с `--read-only`.
+- **Реальные MCP-серверы по stdio.** PostgreSQL (только чтение), shell в песочнице и официальный
+  [github-mcp-server](https://github.com/github/github-mcp-server). Новый сервер подключается одной строкой в `mcp_servers.json`.
+- **Граф шагов.** Независимые шаги выполняются параллельно, зависимые получают факты предыдущих.
+- **Self-healing.** Если сервер вернул ошибку, модель видит её текст и исправляет вызов.
+- **Три слоя защиты.** Отказ агента, Policy Guard в коде и read-only на стороне серверов.
+- **Честные цифры.** Бенчмарк сверяет ответы с данными и сравнивает с обычным клиентом на той же модели.
+- **Ключи через интерфейс.** Ключ проверяется реальным запросом и хранится только у вас.
 
-### MCP-серверы
+## ● Быстрый старт
 
-| Сервер | Что это | Инструменты |
-|---|---|---|
-| `postgres` | `servers/postgres_server.py` (свой, FastMCP + psycopg) | `run_select`, `describe_table`, `list_tables`, `explain_query`, `active_locks`, `table_sizes` |
-| `shell` | `servers/shell_server.py` (свой, песочница `sandbox/`) | `grep_files`, `tail_file`, `list_dir`, `disk_usage`, `process_list`, `run_command` |
-| `github` | [github/github-mcp-server](https://github.com/github/github-mcp-server) v1.14.0, `--read-only` | 30 (`mcp_servers.json`) или 69 (`mcp_servers.large.json`, все toolsets) |
-
-Любой другой MCP-сервер подключается строчкой в `mcp_servers.json`: инструменты берутся из `list_tools`, в коде ничего менять не нужно.
-
-## Запуск
-
-Нужны ключ [aitunnel](https://aitunnel.ru) и GitHub-токен (fine-grained, только чтение). Без токена
-GitHub-сервер помечается недоступным, остальное работает.
+Нужен [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
 ```bash
-cp .env.example .env    # впишите AITUNNEL_API_KEY и GITHUB_PERSONAL_ACCESS_TOKEN
+git clone -b claude/ecstatic-feynman-cv7w2m https://github.com/Xxxkat10xxX/PolyMCP_router_fork.git
 ```
 
-### Вариант 1. Docker (проще всего, в том числе на Windows)
+```bash
+cd PolyMCP_router_fork
+```
 
 ```bash
 docker compose up --build
 ```
 
-UI откроется на http://localhost:8501. Compose поднимет Postgres с демо-данными и соберёт
-GitHub MCP-сервер из исходников.
+Откройте **http://localhost:8501**. При первом запуске интерфейс попросит ключи:
 
-### Вариант 2. Локально (Linux/macOS)
+<div align="center">
+<img src="docs/img/setup.jpg" alt="Экран первого запуска: ввод ключей" width="760">
+</div>
+
+| Что | Где взять | Обязательно |
+|---|---|---|
+| Ключ aitunnel | личный кабинет [aitunnel.ru](https://aitunnel.ru) → API-ключи | да |
+| GitHub-токен | github.com → Settings → Developer settings → Personal access tokens (fine-grained, только чтение) | нет, без него не будет сервера GitHub |
+
+Ключ проверяется запросом к провайдеру и сохраняется в `.polymcp/secrets.env`: файл не попадает в git,
+права на него только у владельца, а в Docker он лежит в примонтированной папке и переживает перезапуск.
+Поменять ключи или модель можно кнопкой **«Ключи и модель»** в боковой панели.
+
+> Предпочитаете файл? Скопируйте `.env.example` в `.env` и впишите ключи туда. Если ключ задан и
+> там, и в интерфейсе, работает тот, что из интерфейса.
+
+## ● Как это работает
+
+```mermaid
+flowchart LR
+    Q([Запрос]) --> P[1 · Planner<br/>граф шагов]
+    P --> S1
+    subgraph S1 [Для каждого шага]
+        direction LR
+        SEL[2 · Selector<br/>top-5 + сжатие схем] --> SYN[3 · Synthesizer<br/>вызов + Policy Guard]
+        SYN --> EX[4 · Executor<br/>MCP-вызов, self-healing,<br/>факты шага]
+    end
+    S1 --> C{один шаг?}
+    C -- да --> A([Ответ])
+    C -- нет --> CR[5 · Critic<br/>ответ по фактам] --> A
+    CR -. не хватает данных .-> P
+```
+
+<div align="center">
+<img src="docs/img/answer.jpg" alt="Ответ, метрики и граф плана" width="900">
+</div>
+
+| # | Агент | Что делает | Модуль |
+|---|---|---|---|
+| 1 | Planner | Разбивает запрос на шаги, по одному серверу на шаг | `polymcp/agents/planner.py` |
+| 2 | Selector + Schema Pruner | BM25 выбирает 5 инструментов, схемы сжимаются (без LLM) | `polymcp/agents/selector.py` |
+| 3 | Synthesizer + Policy Guard | Function calling выбирает инструмент и аргументы, guard проверяет вызов | `polymcp/agents/executor.py`, `guard.py` |
+| 4 | Self-Healing Executor | Вызывает сервер, исправляет ошибки, пишет факты шага или финальный ответ | `polymcp/agents/executor.py` |
+| 5 | Condenser + Critic | Сжатие длинных ответов (запасной путь) и итог для многошаговых планов | `polymcp/agents/condenser.py` |
+
+### Безопасность
+
+1. **Агент** может отказаться от шага (`refuse_step`), если тот требует записи или удаления.
+2. **Policy Guard** — обычный код, промпт-инъекцией его не обойти: только инструменты с `readOnlyHint`,
+   SQL без изменяющих операций, shell без `rm`, перенаправлений и подстановок.
+3. **Серверы**: Postgres открывает только read-only транзакции, shell не выходит за песочницу и
+   запускает команды из белого списка, GitHub работает с `--read-only`.
+
+### MCP-серверы
+
+| Сервер | Реализация | Инструменты |
+|---|---|---|
+| `postgres` | `servers/postgres_server.py` (FastMCP + psycopg) | `run_select`, `describe_table`, `list_tables`, `explain_query`, `active_locks`, `table_sizes` |
+| `shell` | `servers/shell_server.py` (песочница `sandbox/`) | `grep_files`, `tail_file`, `list_dir`, `disk_usage`, `process_list`, `run_command` |
+| `github` | github-mcp-server v1.14.0, `--read-only` | 30 (`mcp_servers.json`) или 69 (`mcp_servers.large.json`) |
+
+## ● Бенчмарк
+
+<div align="center">
+<img src="docs/img/bench.jpg" alt="Вкладка «Бенчмарк»" width="900">
+</div>
+
+17 задач из `bench/tasks.json`: 9 на один сервер, 4 на несколько серверов (включая цепочки), 4 на
+безопасность. Эталоны посчитаны по seed-данным (`seed/`, `sandbox/`). Ответ проверяется
+регулярными выражениями, а в задачах на безопасность дополнительно проверяется, что база и файлы целы.
+
+**Baseline** — тот же агентный цикл, но с одним агентом и **всеми** инструментами сразу (так работает
+обычный MCP-клиент). Модель, серверы, Policy Guard и настройки рассуждений одинаковые.
+
+| | 42 инструмента | | 69 инструментов | |
+|---|---|---|---|---|
+| | **PolyMCP** | Baseline | **PolyMCP** | Baseline |
+| Решено задач | 16/17 | 17/17 | 16/17 | 15/17 |
+| Безопасность | 4/4 | 4/4 | 4/4 | 4/4 |
+| Входных токенов на задачу | **3 505** | 32 718 | **4 318** | 48 215 |
+| Выходных токенов на задачу | 334 | 177 | 390 | 182 |
+| Вызовов модели на задачу | 4,4 | 4,2 | 4,8 | 3,9 |
+| Время на задачу, с | 9,0 | 9,1 | 9,7 | 8,8 |
+| Стоимость 17 задач, ₽ | **2,09** | 2,17 | **2,54** | 2,84 |
+
+<sub>Модель `gpt-6-luna` через aitunnel, 20.11.2026. Полные результаты:
+[`bench/RESULTS-default.md`](bench/RESULTS-default.md), [`bench/RESULTS-large.md`](bench/RESULTS-large.md).</sub>
+
+**Выводы**
+
+- **Входных токенов в 9–11 раз меньше**, и с ростом каталога разрыв увеличивается: baseline растёт
+  линейно, PolyMCP почти не меняется.
+- **Цена и время — на уровне baseline или ниже.** Деньги у `gpt-6-luna` уходят в основном на скрытые
+  рассуждения и число вызовов: вызов с рассуждениями стоит ~0,04 ₽, без них ~0,01 ₽. Поэтому завершающий
+  ход Executor сразу пишет факты или финальный ответ, а механическим агентам выставлен `reasoning_effort=none`.
+  По сравнению с первой версией конвейера: 6,1 → 4,4 вызова, 15,6 → 9,0 с, 2,87 → 2,09 ₽.
+- **Точность сопоставимая.** Ошибки от прогона к прогону разные; самая трудная задача — «самый первый
+  коммит» (нужно догадаться пролистать историю).
+- **Разброс заметный.** Стоимость одного и того же baseline между прогонами менялась на 30%, так что
+  разница на 42 инструментах в пределах шума. На 69 инструментах PolyMCP дешевле.
+- Сжатие схем само по себе даёт ~27%, основная экономия — от отбора инструментов.
+
+## ● Настройка
+
+Всё, кроме ключей, задаётся переменными окружения или в `.env`:
+
+| Переменная | По умолчанию | Что делает |
+|---|---|---|
+| `AITUNNEL_API_KEY` | — | ключ модели (удобнее задать в интерфейсе) |
+| `AITUNNEL_BASE_URL` | `https://api.aitunnel.ru/v1/` | любой OpenAI-совместимый API |
+| `POLYMCP_MODEL` | `gpt-6-luna` | модель |
+| `POLYMCP_REASONING` | `planner=minimal,*=none` | `reasoning_effort` по агентам; пусто — не отправлять |
+| `DATABASE_URL` | `postgresql://polymcp:polymcp@localhost:5432/polymcp` | база для сервера `postgres` |
+| `GITHUB_PERSONAL_ACCESS_TOKEN` | — | токен для сервера `github` |
+| `GITHUB_MCP_BIN` | `github-mcp-server` | путь к бинарнику GitHub MCP-сервера |
+| `POLYMCP_DATA_DIR` | `.polymcp` | где хранятся ключи из интерфейса |
+
+Policy Guard настраивается в `mcp_servers.json` → `policy` (`allow_write_tools`, `deny_tools`).
+Оформление: цвета и шрифты — `.streamlit/config.toml`, детали — `ui/style.css`.
+
+## ● Разработка
+
+Запуск без Docker (Python 3.12+; базу проще поднять так: `docker compose up -d postgres`):
 
 ```bash
-docker compose up -d postgres
+python -m venv .venv
 ```
 
 ```bash
-python -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+.venv\Scripts\activate
 ```
 
-GitHub MCP-сервер: скачайте бинарник со [страницы релизов](https://github.com/github/github-mcp-server/releases)
-или соберите его (`go install github.com/github/github-mcp-server/cmd/github-mcp-server@v1.14.0`),
-затем укажите путь в `GITHUB_MCP_BIN`.
+На Linux и macOS вместо этого: `source .venv/bin/activate`.
+
+```bash
+pip install -r requirements.txt
+```
 
 ```bash
 streamlit run app_ui.py
 ```
 
+GitHub MCP-сервер возьмите со [страницы релизов](https://github.com/github/github-mcp-server/releases)
+и укажите путь в `GITHUB_MCP_BIN`. Без Docker на Windows не работают только `process_list` и
+`run_command`: им нужны Unix-утилиты.
+
+Один запрос из консоли (`--baseline` — обычный клиент, `--json` — полная трасса):
+
 ```bash
-python -m polymcp.cli "Найди открытые критические баги в PostgreSQL и их упоминания в логах"
+python -m polymcp.cli "Какие баги сейчас в статусе in_progress?"
 ```
 
-Интерфейс оформлен в стиле «бумага и чернила»: кремовый фон, рамки и жёсткие тени, коралловый акцент,
-шрифт Space Grotesk (для кириллицы — Manrope). Тема задаётся в `.streamlit/config.toml`, детали — в `ui/style.css`,
-шрифты лежат в `static/fonts` под лицензией OFL.
-
-`--baseline` запускает тот же запрос одним агентом со всеми инструментами, `--json` выводит полную трассу.
-
-На Windows без Docker всё, кроме `process_list` и `run_command`, тоже работает: этим двум инструментам нужны Unix-утилиты.
-
-### Тесты и бенчмарк
+Тесты (LLM не нужна; тест Postgres пропускается, если база недоступна):
 
 ```bash
 pytest
 ```
+
+Бенчмарк (тратит реальные деньги, ~2–3 ₽ за режим):
 
 ```bash
 python -m bench.run
@@ -117,71 +230,26 @@ python -m bench.run
 python -m bench.run --config mcp_servers.large.json
 ```
 
-Тестам LLM не нужна. Интеграционный тест Postgres пропускается, если база недоступна.
-Бенчмарк тратит реальные деньги: около 4–5 ₽ за прогон на `gpt-6-luna`.
+### Структура
 
-## Бенчмарк
+```
+polymcp/            ядро: агенты, хаб MCP, клиент LLM, конвейер, baseline, CLI
+  agents/           planner · selector · executor (+ synthesizer) · guard · condenser (+ critic)
+servers/            свои MCP-серверы: postgres, shell
+app_ui.py           интерфейс (Streamlit)    ui/style.css · .streamlit/config.toml · static/fonts
+bench/              задачи, раннер, результаты
+seed/ sandbox/      демо-данные для Postgres и shell
+tests/              unit- и интеграционные тесты
+mcp_servers*.json   какие MCP-серверы подключать
+```
 
-17 задач (`bench/tasks.json`): 9 на один сервер, 4 на несколько серверов (включая цепочки, где
-шаг использует результат предыдущего), 4 на безопасность. Эталоны посчитаны по seed-данным
-(`seed/postgres/01_schema.sql`, `sandbox/`) и истории этого репозитория. Ответ проверяется
-регулярными выражениями, для задач на безопасность дополнительно проверяется, что база и
-файлы не изменились.
+## ● Ограничения
 
-Сравниваются две стратегии на одной модели и одних серверах:
-
-- **PolyMCP** — пайплайн из пяти агентов;
-- **Baseline** — один агент, которому отдают все инструменты всех серверов с полными схемами
-  (так работает обычный MCP-клиент) и стандартный цикл function calling. Policy Guard тот же.
-
-### Результаты (2026-11-20, `gpt-6-luna`)
-
-| | Каталог 42 инстр. (8,6 тыс. ток. схем) | | Каталог 69 инстр. (14,5 тыс. ток. схем) | |
-|---|---|---|---|---|
-| | **PolyMCP** | Baseline | **PolyMCP** | Baseline |
-| Решено задач | 16/17 | 17/17 | 16/17 | 15/17 |
-| Безопасность (отказ, данные целы) | 4/4 | 4/4 | 4/4 | 4/4 |
-| Prompt-токенов на задачу | 3 505 | 32 718 | 4 318 | 48 215 |
-| Completion-токенов на задачу | 334 | 177 | 390 | 182 |
-| LLM-вызовов на задачу | 4,4 | 4,2 | 4,8 | 3,9 |
-| Время на задачу, с | 9,0 | 9,1 | 9,7 | 8,8 |
-| Стоимость 17 задач, ₽ | 2,09 | 2,17 | 2,54 | 2,84 |
-
-Обе стратегии работают с `reasoning_effort` из `POLYMCP_REASONING` (по умолчанию `planner=minimal,*=none`;
-baseline получает `none`).
-
-**Что это значит:**
-
-- **Точность сопоставимая.** Обе стратегии решают 15–17 задач из 17; ошибки от прогона к прогону разные.
-  Самая трудная задача — «самый первый коммит» (нужно догадаться пролистать историю).
-- **Prompt-токенов в 9–11 раз меньше**: модель видит 5 сжатых схем вместо всего каталога. С ростом
-  каталога baseline растёт линейно, PolyMCP почти не меняется.
-- **Цена и время теперь на уровне baseline или ниже.** Главная статья расхода у `gpt-6-luna` — не
-  входные токены, а скрытые рассуждения модели (reasoning) и число вызовов: вызов с рассуждениями стоит
-  ~0,04 ₽, без них ~0,01 ₽. Поэтому:
-  1. завершающий ход Executor сразу пишет факты шага (Condenser вызывается только как запасной путь);
-  2. для плана из одного шага он же пишет финальный ответ — Critic не нужен; отказ сразу становится ответом;
-  3. механическим агентам выставлен `reasoning_effort=none`, Planner'у — `minimal`.
-
-  Итог по сравнению с первой версией конвейера: вызовов модели 6,1 → 4,4 на задачу,
-  время 15,6 → 9,0 с, стоимость прогона 2,87 → 2,09 ₽.
-- **Разброс между прогонами заметный**: стоимость одного и того же baseline менялась между прогонами
-  на 30%. Разница PolyMCP и baseline на каталоге из 42 инструментов в пределах шума, на 69 — в пользу PolyMCP.
-- **Сжатие схем само по себе даёт ~28%**, основная экономия — от отбора инструментов.
-- **Self-healing реально срабатывает:** 3 шагов в двух прогонах восстановились после
-  настоящей ошибки сервера.
-
-Полные результаты по задачам: [`bench/RESULTS-default.md`](bench/RESULTS-default.md),
-[`bench/RESULTS-large.md`](bench/RESULTS-large.md), трассы — `bench/results/latest-*.json`
-(их же показывает вкладка «Бенчмарк» в UI).
-
-## Ограничения
-
-- Демо-данные небольшие и синтетические. Задачи проверяют маршрутизацию, вызовы и безопасность,
+- Демо-данные небольшие и синтетические: задачи проверяют маршрутизацию, вызовы и безопасность,
   а не аналитику на больших объёмах.
-- 17 задач — это smoke-бенчмарк, а не статистически значимая оценка: от прогона к прогону модель
-  ошибается в разных местах, так что разница в 1–2 задачи — шум.
-- Policy Guard для SQL и shell завязан на имена серверов `postgres` и `shell`. Для других серверов
-  работают общие правила: `readOnlyHint` и deny-list.
-- Отбор инструментов лексический (BM25 по английским ключевым словам, которые пишет Planner).
-  Для каталогов из сотен инструментов стоит добавить эмбеддинги.
+- 17 задач — smoke-бенчмарк, а не статистически значимая оценка.
+- SQL- и shell-правила Policy Guard привязаны к серверам `postgres` и `shell`; для остальных работают
+  `readOnlyHint` и deny-list.
+- Отбор инструментов лексический (BM25). Для каталогов из сотен инструментов стоит добавить эмбеддинги.
+
+<sub>Шрифты Space Grotesk и Manrope распространяются по лицензии SIL Open Font License (`static/fonts`).</sub>

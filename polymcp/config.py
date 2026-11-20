@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 from dotenv import load_dotenv
 
+from . import secrets
+
 load_dotenv()
+secrets.load_into_env()  # ключи, сохранённые через UI, главнее .env
 
 
 class ConfigError(RuntimeError):
@@ -27,7 +30,8 @@ class Settings:
         api_key = os.getenv("AITUNNEL_API_KEY", "").strip()
         if not api_key or api_key.startswith("your_"):
             raise ConfigError(
-                "AITUNNEL_API_KEY не задан. Скопируйте .env.example в .env и укажите ключ aitunnel."
+                "AITUNNEL_API_KEY не задан. Укажите ключ в интерфейсе (streamlit run app_ui.py) "
+                "или в файле .env (см. .env.example)."
             )
         return cls(
             api_key=api_key,

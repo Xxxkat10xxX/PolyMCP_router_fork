@@ -28,6 +28,8 @@ services:
       SHELL_SANDBOX_ROOT: /app/sandbox
     ports:
       - "8501:8501"
+    volumes:
+      - ./.polymcp:/app/.polymcp   # ключи, сохранённые через интерфейс, переживают перезапуск
     depends_on:
       postgres:
         condition: service_healthy

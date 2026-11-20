@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import html
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ import streamlit as st
 from polymcp.agents.executor import describe_call
 from polymcp.agents.selector import openai_tool
 from polymcp.baseline import run_baseline
+from polymcp import secrets
 from polymcp.config import ConfigError, Settings
 from polymcp.contracts import Plan, RunTrace, StepStatus, StepTrace
 from polymcp.hub import MCPHub
@@ -221,10 +223,77 @@ def render_benchmarks() -> None:
 
 # ── Страница ─────────────────────────────────────────────────────────────────
 
+def keys_form(first_run: bool) -> None:
+    """Форма ключей: проверяет реальным запросом и сохраняет в .polymcp/secrets.env."""
+    current_base = os.getenv("AITUNNEL_BASE_URL", "https://api.aitunnel.ru/v1/")
+    current_model = os.getenv("POLYMCP_MODEL", "gpt-6-luna")
+    has_key = bool(os.getenv("AITUNNEL_API_KEY", "").strip())
+    with st.form("pm_keys", border=False):
+        api_key = st.text_input(
+            "Ключ aitunnel" + ("" if first_run else f" · сейчас {secrets.mask(os.getenv('AITUNNEL_API_KEY'))}"),
+            type="password", placeholder="sk-aitunnel-…" if first_run else "оставьте пустым, чтобы не менять",
+            help="Личный кабинет aitunnel.ru → API-ключи.",
+        )
+        gh_token = st.text_input(
+            f"GitHub-токен (необязательно) · сейчас {secrets.mask(os.getenv('GITHUB_PERSONAL_ACCESS_TOKEN'))}",
+            type="password", placeholder="github_pat_…",
+            help="Fine-grained токен только на чтение: github.com → Settings → Developer settings → "
+                 "Personal access tokens. Без него сервер GitHub будет недоступен, остальное работает.",
+        )
+        with st.expander("Провайдер и модель"):
+            base_url = st.text_input("Адрес API (OpenAI-совместимый)", value=current_base)
+            model = st.text_input("Модель", value=current_model)
+        submitted = st.form_submit_button("Проверить и сохранить", type="primary")
+
+    if not submitted:
+        return
+    key_to_check = api_key.strip() or (os.getenv("AITUNNEL_API_KEY", "") if has_key else "")
+    if not key_to_check:
+        st.error("Введите ключ aitunnel.")
+        return
+    updates: dict[str, str] = {}
+    with st.spinner("Проверяю ключ…"):
+        ok, message = secrets.check_aitunnel(key_to_check, base_url.strip(), model.strip())
+    (st.success if ok else st.error)(message)
+    if not ok:
+        return
+    updates.update({"AITUNNEL_API_KEY": api_key, "AITUNNEL_BASE_URL": base_url, "POLYMCP_MODEL": model})
+    if gh_token.strip():
+        with st.spinner("Проверяю GitHub-токен…"):
+            gh_ok, gh_message = secrets.check_github(gh_token.strip())
+        (st.success if gh_ok else st.warning)(gh_message + ("" if gh_ok else " Токен не сохранён."))
+        if gh_ok:
+            updates["GITHUB_PERSONAL_ACCESS_TOKEN"] = gh_token
+    path = secrets.save(updates)
+    inspect_servers.clear()
+    where = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    st.session_state["pm_flash"] = f"{message} Сохранено в {where}."
+    st.rerun()
+
+
+@st.dialog("Ключи и модель")
+def keys_dialog() -> None:
+    keys_form(first_run=False)
+
+
 try:
     settings = Settings.from_env()
-except ConfigError as exc:
-    st.error(str(exc))
+except ConfigError:
+    st.markdown(
+        """
+<div class="pm-hero">
+  <span class="pm-tag"><span class="pm-dot"></span>Первый запуск</span>
+  <h1>Подключите модель.</h1>
+  <p class="pm-lead">Нужен ключ aitunnel — через него агенты обращаются к модели. Ключ проверяется
+  реальным запросом и хранится только у вас, в <code>.polymcp/secrets.env</code>.</p>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    with st.container(key="pm_answer_setup"):
+        st.markdown('<div class="pm-panel-head"><span class="pm-eyebrow"><span class="pm-dot"></span>'
+                    'Ключи</span></div>', unsafe_allow_html=True)
+        keys_form(first_run=True)
     st.stop()
 
 st.markdown(
@@ -265,12 +334,20 @@ with st.sidebar:
     st.markdown('<label class="pm-eyebrow" style="font-size:.76rem">MCP-серверы</label>'
                 f'<div class="pm-servers">{"".join(rows)}</div>', unsafe_allow_html=True)
     for name, reason in info["unavailable"].items():
+        if "GITHUB_PERSONAL_ACCESS_TOKEN" in reason:
+            reason = "нет GitHub-токена — добавьте его в «Ключи и модель»"
         st.caption(f"{name}: {reason}")
     st.markdown(
         f'<div class="pm-note">Каталог: {info["tool_count"]} инструментов, {fmt_int(info["catalog_tokens"])} токенов схем.'
-        f'<br>Модель: <code>{esc(settings.model)}</code></div>',
+        f'<br>Модель: <code>{esc(settings.model)}</code> · ключ {esc(secrets.mask(settings.api_key))}</div>',
         unsafe_allow_html=True,
     )
+    st.write("")
+    if st.button("Ключи и модель", use_container_width=True):
+        keys_dialog()
+
+if flash := st.session_state.pop("pm_flash", None):
+    st.toast(flash)
 
 tab_run, tab_bench = st.tabs(["Запрос", "Бенчмарк"])
 
